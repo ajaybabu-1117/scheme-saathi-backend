@@ -15,7 +15,6 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    dataset_service.bootstrap()
     yield
 
 
