@@ -22,7 +22,14 @@ class SimpleEmbeddingFunction:
 
 @lru_cache
 def get_embedding_function():
-    return SimpleEmbeddingFunction()
+    settings = get_settings()
+
+    if settings.app_env == "production":
+        return SimpleEmbeddingFunction()
+
+    return embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name=settings.embedding_model
+    )
 
 class ChromaClient:
     def __init__(self):
