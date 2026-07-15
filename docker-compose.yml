@@ -1,0 +1,19 @@
+version: '3.9'
+services:
+  api:
+    build: .
+    container_name: scheme-saathi-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./datasets:/app/datasets
+      - ./data:/app/data
+    depends_on:
+      - redis
+  redis:
+    image: redis:7-alpine
+    container_name: scheme-saathi-redis
+    ports:
+      - "6379:6379"

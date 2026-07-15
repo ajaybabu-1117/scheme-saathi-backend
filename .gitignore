@@ -1,0 +1,26 @@
+__pycache__/
+.pytest_cache/
+.venv/
+.env
+*.pyc
+*.pyo
+*.pyd
+data/chroma/
+data/mock_db.json
+data/ingestion_registry.json
+# Environment
+.env
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# ChromaDB
+data/
+data/embeddings/
+*.sqlite3
+.env
+.env.*
+!.env.example

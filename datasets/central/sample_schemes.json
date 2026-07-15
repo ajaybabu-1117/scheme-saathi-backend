@@ -1,0 +1,41 @@
+[
+  {
+    "id": "pm-kisan",
+    "scheme_name": "PM-KISAN",
+    "state": "central",
+    "category": "agriculture",
+    "level": "central",
+    "website": "https://pmkisan.gov.in/",
+    "last_updated": "2026-01-01",
+    "summary": "Income support scheme for eligible farmer families across India.",
+    "description": "Provides income support of ₹6,000 per year in three equal installments to eligible farmer families. Useful for small and marginal farmers.",
+    "eligibility": "Applicable to eligible landholding farmer families across India. Exclusions apply for institutional landholders and certain income tax payers.",
+    "application_process": "Apply through PM-KISAN portal, CSC centers, or state nodal officers."
+  },
+  {
+    "id": "pmay-urban",
+    "scheme_name": "Pradhan Mantri Awas Yojana Urban",
+    "state": "central",
+    "category": "housing",
+    "level": "central",
+    "website": "https://pmay-urban.gov.in/",
+    "last_updated": "2026-01-01",
+    "summary": "Affordable housing mission for urban beneficiaries.",
+    "description": "Supports eligible urban households with affordable housing assistance, credit linked subsidy, and beneficiary-led construction support.",
+    "eligibility": "Intended for eligible urban households, especially EWS, LIG and MIG categories based on applicable norms.",
+    "application_process": "Apply through state urban development systems or official PMAY Urban channels."
+  },
+  {
+    "id": "niramaya",
+    "scheme_name": "Niramaya Health Insurance Scheme",
+    "state": "central",
+    "category": "health",
+    "level": "central",
+    "website": "https://thenationaltrust.gov.in/",
+    "last_updated": "2026-01-01",
+    "summary": "Health insurance support for persons with certain disabilities.",
+    "description": "Provides affordable health insurance coverage for persons with autism, cerebral palsy, mental retardation and multiple disabilities under the National Trust framework.",
+    "eligibility": "For persons with specified disabilities registered under National Trust requirements.",
+    "application_process": "Apply via registered organizations or authorized channels under the National Trust ecosystem."
+  }
+]
