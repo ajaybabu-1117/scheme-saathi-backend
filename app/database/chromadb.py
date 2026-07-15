@@ -21,15 +21,9 @@ class SimpleEmbeddingFunction:
             vectors.append([value / norm for value in bucket])
         return vectors
 
-
 @lru_cache
 def get_embedding_function():
-    settings = get_settings()
-    try:
-        return embedding_functions.SentenceTransformerEmbeddingFunction(model_name=settings.embedding_model)
-    except Exception:
-        return SimpleEmbeddingFunction()
-
+    return SimpleEmbeddingFunction()
 
 class ChromaClient:
     def __init__(self):
