@@ -5,7 +5,6 @@ from functools import lru_cache
 from typing import Any, Dict, List
 
 import chromadb
-from chromadb.utils import embedding_functions
 
 from app.core.config import get_settings
 
