@@ -30,6 +30,12 @@ class SimpleEmbeddingFunction:
 
         return vectors
 
+    def name(self) -> str:
+        return "simple_embedding"
+
+    def __str__(self) -> str:
+        return self.name()
+
 
 @lru_cache
 def get_embedding_function():
