@@ -11,7 +11,7 @@ from app.core.config import get_settings
 
 
 class SimpleEmbeddingFunction:
-    def __call__(self, texts: List[str]) -> List[List[float]]:
+    def __call__(self, input: List[str]) -> List[List[float]]:
         vectors = []
 
         for text in texts:
