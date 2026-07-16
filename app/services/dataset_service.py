@@ -10,7 +10,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 
 from app.core.config import get_settings
-from app.database.chromadb import chroma_client
 from app.utils.hashing import sha256_file
 from app.utils.ids import slugify
 from app.utils.states import normalize_state
