@@ -1,53 +1,52 @@
 from contextlib import asynccontextmanager
 
-print("1. Starting imports...")
-
 from fastapi import FastAPI
-print("2. FastAPI imported")
-
 from fastapi.middleware.cors import CORSMiddleware
-print("3. CORS imported")
 
 from app.api.v1.router import api_router
-print("4. Router imported")
-
 from app.core.config import get_settings
-print("5. Config imported")
-
 from app.core.logging import setup_logging
-print("6. Logging imported")
-
 from app.middleware.request_context import RequestContextMiddleware
-print("7. Middleware imported")
 
-from app.services.dataset_service import dataset_service
-print("8. Dataset service imported")
-
+# Initialize logging and settings
 setup_logging()
-print("9. Logging setup complete")
-
 settings = get_settings()
-print("10. Settings loaded")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("11. Application startup")
+    """
+    Startup and shutdown events.
+    Put future initialization code here:
+    - Database connections
+    - Redis connection
+    - Firebase initialization
+    - Background jobs
+    - Scheduled tasks
+    """
+
+    print("🚀 SCHEME SAATHI Backend started successfully")
+
+    # Example:
+    # await redis_service.connect()
+    # await notification_service.start()
+
     yield
-    print("12. Application shutdown")
 
+    print("🛑 SCHEME SAATHI Backend shutting down")
 
-print("13. Creating FastAPI app")
+    # Example:
+    # await redis_service.disconnect()
+
 
 app = FastAPI(
     title="SCHEME SAATHI Backend",
-    description="AI-powered government scheme assistant backend for India",
+    description="AI-powered Government Scheme Assistant for India",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-print("14. FastAPI app created")
-
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -56,24 +55,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-print("15. CORS middleware added")
-
+# Request context middleware
 app.add_middleware(RequestContextMiddleware)
 
-print("16. Request context middleware added")
+# Register all API routes
+app.include_router(
+    api_router,
+    prefix=settings.api_v1_prefix,
+)
 
-app.include_router(api_router, prefix=settings.api_v1_prefix)
 
-print("17. API router included")
+@app.get("/", tags=["Root"])
+def root():
+    """
+    Root endpoint.
+    Useful for Render health checks and browser testing.
+    """
+    return {
+        "message": "🚀 SCHEME SAATHI Backend is running",
+        "version": "1.0.0",
+        "environment": settings.app_env,
+        "docs": "/docs",
+        "health": "/health",
+        "api_prefix": settings.api_v1_prefix,
+    }
 
 
 @app.get("/health", tags=["Health"])
 def health():
+    """
+    Health check endpoint.
+    """
     return {
         "status": "ok",
         "service": settings.app_name,
         "environment": settings.app_env,
+        "version": "1.0.0",
     }
-
-
-print("18. Application initialization complete")
