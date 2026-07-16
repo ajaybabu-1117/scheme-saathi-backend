@@ -34,10 +34,10 @@ class SchemeRepository:
             return []
 
     def list_chunks(
-    self,
-    where: Dict[str, Any] | None = None,
+        self,
+        where: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
-    schemes = self._load_schemes()
+        schemes = self._load_schemes()
 
     items = []
 
