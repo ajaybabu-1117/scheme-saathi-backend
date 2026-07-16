@@ -9,6 +9,18 @@
     "last_updated": "2026-01-01",
     "summary": "Income support scheme for eligible farmer families across India.",
     "description": "Provides income support of ₹6,000 per year in three equal installments to eligible farmer families. Useful for small and marginal farmers.",
+    "benefits": "Provides financial assistance of ₹6,000 per year to eligible farmers.",
+    "tags": [
+      "farmer",
+      "agriculture",
+      "kisan",
+      "crop",
+      "farming",
+      "subsidy",
+      "income support",
+      "rythu",
+      "farmer welfare"
+    ],
     "eligibility": "Applicable to eligible landholding farmer families across India. Exclusions apply for institutional landholders and certain income tax payers.",
     "application_process": "Apply through PM-KISAN portal, CSC centers, or state nodal officers."
   },
@@ -22,6 +34,18 @@
     "last_updated": "2026-01-01",
     "summary": "Affordable housing mission for urban beneficiaries.",
     "description": "Supports eligible urban households with affordable housing assistance, credit linked subsidy, and beneficiary-led construction support.",
+    "benefits": "Financial assistance and subsidy for construction or purchase of affordable housing.",
+    "tags": [
+      "housing",
+      "home",
+      "house",
+      "construction",
+      "urban",
+      "loan",
+      "subsidy",
+      "property",
+      "residence"
+    ],
     "eligibility": "Intended for eligible urban households, especially EWS, LIG and MIG categories based on applicable norms.",
     "application_process": "Apply through state urban development systems or official PMAY Urban channels."
   },
@@ -35,6 +59,18 @@
     "last_updated": "2026-01-01",
     "summary": "Health insurance support for persons with certain disabilities.",
     "description": "Provides affordable health insurance coverage for persons with autism, cerebral palsy, mental retardation and multiple disabilities under the National Trust framework.",
+    "benefits": "Affordable health insurance coverage and medical support for persons with disabilities.",
+    "tags": [
+      "health",
+      "medical",
+      "insurance",
+      "hospital",
+      "treatment",
+      "disability",
+      "health scheme",
+      "medical assistance",
+      "patient"
+    ],
     "eligibility": "For persons with specified disabilities registered under National Trust requirements.",
     "application_process": "Apply via registered organizations or authorized channels under the National Trust ecosystem."
   }
