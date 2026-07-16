@@ -11,31 +11,39 @@ from app.core.config import get_settings
 
 
 class SimpleEmbeddingFunction:
-    def __call__(self, input: List[str]) -> List[List[float]]:
-        vectors: List[List[float]] = []
+    def _embed(self, texts: List[str]) -> List[List[float]]:
+        vectors = []
 
-        for text in input:
+        for text in texts:
             bucket = [0.0] * 64
 
             for idx, char in enumerate(text.lower()[:2048]):
                 bucket[(idx + ord(char)) % 64] += 1.0
 
             norm = math.sqrt(
-                sum(value * value for value in bucket)
+                sum(v * v for v in bucket)
             ) or 1.0
 
             vectors.append(
-                [value / norm for value in bucket]
+                [v / norm for v in bucket]
             )
 
         return vectors
 
-    def name(self) -> str:
+    def __call__(self, input):
+        return self._embed(input)
+
+    def embed_documents(self, texts):
+        return self._embed(texts)
+
+    def embed_query(self, input):
+        return self._embed(input)
+
+    def name(self):
         return "simple_embedding"
 
-    def __str__(self) -> str:
+    def __str__(self):
         return self.name()
-
 @lru_cache
 def get_embedding_function():
     settings = get_settings()
