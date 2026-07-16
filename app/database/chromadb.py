@@ -24,9 +24,11 @@ class SimpleEmbeddingFunction:
 def get_embedding_function():
     settings = get_settings()
 
+    # Use lightweight embeddings on Render
     if settings.app_env == "production":
         return SimpleEmbeddingFunction()
 
+    # Use multilingual model locally
     return embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name=settings.embedding_model
     )
