@@ -34,38 +34,58 @@ class SchemeRepository:
             return []
 
     def list_chunks(
-        self,
-        where: Dict[str, Any] | None = None,
-    ) -> List[Dict[str, Any]]:
-        schemes = self._load_schemes()
+    self,
+    where: Dict[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    schemes = self._load_schemes()
 
-        items = []
+    items = []
 
-        for scheme in schemes:
-            if where:
-                skip = False
+    for scheme in schemes:
+        if where:
+            skip = False
 
-                for key, value in where.items():
-                    if scheme.get(key) != value:
+            for key, value in where.items():
+
+                scheme_value = str(
+                    scheme.get(key, "")
+                ).lower().replace(" ", "-")
+
+                filter_value = str(
+                    value
+                ).lower().replace(" ", "-")
+
+                # Return both state schemes and central schemes
+                if key == "state":
+                    if (
+                        scheme_value != filter_value
+                        and scheme_value != "central"
+                    ):
+                        skip = True
+                        break
+                else:
+                    if scheme_value != filter_value:
                         skip = True
                         break
 
-                if skip:
-                    continue
+            if skip:
+                continue
 
-            items.append(
-                {
-                    "id": scheme.get("scheme_id"),
-                    "document": scheme.get(
-                        "description",
-                        ""
-                    ),
-                    "metadata": scheme,
-                }
-            )
+        items.append(
+            {
+                "id": scheme.get(
+                    "id",
+                    scheme.get("scheme_id")
+                ),
+                "document": scheme.get(
+                    "description",
+                    ""
+                ),
+                "metadata": scheme,
+            }
+        )
 
-        return items
-
+    return items
     def search_semantic(
         self,
         query: str,
@@ -158,7 +178,7 @@ class SchemeRepository:
     ) -> Optional[Dict[str, Any]]:
         chunks = self.list_chunks(
             where={
-                "scheme_id": scheme_id
+                "id": scheme_id
             }
         )
 
