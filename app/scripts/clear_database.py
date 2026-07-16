@@ -1,4 +1,3 @@
-from app.database.chromadb import chroma_client
 from app.database.firebase import firebase_client
 
 if __name__ == "__main__":
