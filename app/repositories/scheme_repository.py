@@ -14,6 +14,7 @@ class SchemeRepository:
 
     def _load_schemes(self) -> List[Dict[str, Any]]:
         if not self.DATA_FILE.exists():
+            print(f"File not found: {self.DATA_FILE}")
             return []
 
         try:
@@ -25,6 +26,7 @@ class SchemeRepository:
                 data = json.load(f)
 
             if isinstance(data, list):
+                print(f"Loaded {len(data)} schemes")
                 return data
 
             return []
@@ -36,64 +38,63 @@ class SchemeRepository:
     def list_chunks(
         self,
         where: Dict[str, Any] | None = None,
-) -> List[Dict[str, Any]]:
+    ) -> List[Dict[str, Any]]:
         schemes = self._load_schemes()
 
-    items = []
+        items = []
 
-    for scheme in schemes:
-        if where:
-            skip = False
+        for scheme in schemes:
+            if where:
+                skip = False
 
-            for key, value in where.items():
+                for key, value in where.items():
 
-                scheme_value = str(
-                    scheme.get(key, "")
-                ).lower().replace(" ", "-")
+                    scheme_value = str(
+                        scheme.get(key, "")
+                    ).lower().replace(" ", "-")
 
-                filter_value = str(
-                    value
-                ).lower().replace(" ", "-")
+                    filter_value = str(
+                        value
+                    ).lower().replace(" ", "-")
 
-                # Return both state schemes and central schemes
-                if key == "state":
-                    if (
-                        scheme_value != filter_value
-                        and scheme_value != "central"
-                    ):
-                        skip = True
-                        break
-                else:
-                    if scheme_value != filter_value:
-                        skip = True
-                        break
+                    # Allow both state schemes and central schemes
+                    if key == "state":
+                        if (
+                            scheme_value != filter_value
+                            and scheme_value != "central"
+                        ):
+                            skip = True
+                            break
+                    else:
+                        if scheme_value != filter_value:
+                            skip = True
+                            break
 
-            if skip:
-                continue
+                if skip:
+                    continue
 
-        items.append(
-            {
-                "id": scheme.get(
-                    "id",
-                    scheme.get("scheme_id")
-                ),
-                "document": scheme.get(
-                    "description",
-                    ""
-                ),
-                "metadata": scheme,
-            }
-        )
+            items.append(
+                {
+                    "id": scheme.get(
+                        "id",
+                        scheme.get("scheme_id")
+                    ),
+                    "document": scheme.get(
+                        "description",
+                        ""
+                    ),
+                    "metadata": scheme,
+                }
+            )
 
-    return items
+        return items
+
     def search_semantic(
         self,
         query: str,
         where: Dict[str, Any] | None = None,
         top_k: int = 5,
     ) -> List[Dict[str, Any]]:
-        # For hackathon deployment,
-        # semantic search falls back to keyword search
         return self.search_keyword(
             query=query,
             where=where,
@@ -166,9 +167,7 @@ class SchemeRepository:
 
         return sorted(
             scored,
-            key=lambda row: row[
-                "score"
-            ],
+            key=lambda row: row["score"],
             reverse=True,
         )[:top_k]
 
@@ -188,7 +187,10 @@ class SchemeRepository:
         first = chunks[0]["metadata"]
 
         return {
-            "scheme_id": scheme_id,
+            "scheme_id": first.get(
+                "id",
+                scheme_id
+            ),
             "scheme_name": first.get(
                 "scheme_name"
             ),
@@ -235,10 +237,8 @@ class SchemeRepository:
             meta = row["metadata"]
 
             scheme_id = (
-                meta.get(
-                    "scheme_id"
-                )
-                or meta.get("id")
+                meta.get("id")
+                or meta.get("scheme_id")
             )
 
             current = best.get(
@@ -262,9 +262,7 @@ class SchemeRepository:
                 "website": meta.get(
                     "website"
                 ),
-                "score": row[
-                    "score"
-                ],
+                "score": row["score"],
                 "snippet": row[
                     "document"
                 ][:240],
