@@ -12,20 +12,20 @@ from app.core.config import get_settings
 
 class SimpleEmbeddingFunction:
     def __call__(self, input: List[str]) -> List[List[float]]:
-        vectors = []
+        vectors: List[List[float]] = []
 
-        for text in texts:
+        for text in input:
             bucket = [0.0] * 64
 
             for idx, char in enumerate(text.lower()[:2048]):
                 bucket[(idx + ord(char)) % 64] += 1.0
 
             norm = math.sqrt(
-                sum(v * v for v in bucket)
+                sum(value * value for value in bucket)
             ) or 1.0
 
             vectors.append(
-                [v / norm for v in bucket]
+                [value / norm for value in bucket]
             )
 
         return vectors
@@ -33,7 +33,7 @@ class SimpleEmbeddingFunction:
     def name(self) -> str:
         return "simple_embedding"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name()
 
 @lru_cache
