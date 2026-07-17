@@ -7,12 +7,13 @@ from typing import Any, Dict, List
 from app.repositories.scheme_repository import scheme_repository
 from app.schemas.chat import Citation
 from app.schemas.profile import UserProfile
-from app.services.llm_service import llm_service
 from app.services.translation_service import translation_service
 from app.utils.states import detect_state, normalize_state
 from app.utils.text import clean_text
 
 logger = logging.getLogger(__name__)
+
+NOT_SPECIFIED = "Not specified in available data."
 
 # Category -> (trigger keywords, expansion terms appended to the query)
 CATEGORY_EXPANSIONS: Dict[str, tuple[list[str], str]] = {
@@ -84,6 +85,44 @@ def _contains_word(text: str, phrase: str) -> bool:
     """Whole-word/phrase match so 'farmer' doesn't match inside 'farmerish' etc."""
     pattern = r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"
     return re.search(pattern, text) is not None
+
+
+def _build_scheme_section(item: Dict[str, Any]) -> str:
+    """Build a deterministic Markdown section for a single retrieved scheme
+    using ONLY fields present in the retrieved data. Never hallucinates."""
+
+    metadata = item.get("metadata") or {}
+
+    scheme_name = (
+        item.get("scheme_name")
+        or item.get("title")
+        or "Unknown Scheme"
+    )
+
+    # Benefits: snippet first, then metadata["benefits"], else not specified.
+    benefits = item.get("snippet") or metadata.get("benefits") or NOT_SPECIFIED
+
+    # Eligibility: metadata["eligibility"], else not specified.
+    eligibility = metadata.get("eligibility") or NOT_SPECIFIED
+
+    # How to Apply: check known metadata keys in order, else not specified.
+    how_to_apply = (
+        metadata.get("how_to_apply")
+        or metadata.get("application_process")
+        or metadata.get("apply")
+        or NOT_SPECIFIED
+    )
+
+    # Website: item.get("website"), else not specified.
+    website = item.get("website") or NOT_SPECIFIED
+
+    return (
+        f"## {scheme_name}\n"
+        f"Benefits: {benefits}\n"
+        f"Eligibility: {eligibility}\n"
+        f"How to Apply: {how_to_apply}\n"
+        f"Website: {website}"
+    )
 
 
 class RAGService:
@@ -231,7 +270,6 @@ class RAGService:
                     item.get("website"),
                 )
 
-        context_lines = []
         citations: List[Citation] = []
 
         for item in retrieved:
@@ -240,17 +278,6 @@ class RAGService:
                 item.get("scheme_name")
                 or item.get("title")
                 or "Unknown Scheme"
-            )
-
-            context_lines.append(
-                f"""
-Scheme: {scheme_name}
-State: {item.get('state')}
-Category: {item.get('category')}
-Level: {item.get('level')}
-Website: {item.get('website')}
-Details: {item.get('snippet')}
-"""
             )
 
             citations.append(
@@ -263,80 +290,13 @@ Details: {item.get('snippet')}
                 )
             )
 
-        context = "\n".join(context_lines)
-
-        system_prompt = """
-You are SCHEME SAATHI, an AI assistant for Indian Government Schemes.
-
-IMPORTANT RULES:
-1. Use ONLY schemes present in RETRIEVED SCHEMES.
-2. NEVER invent scheme names.
-3. NEVER invent websites.
-4. NEVER invent eligibility criteria.
-5. If information is missing, say:
-   "Not specified in available data."
-6. If no schemes are retrieved, say:
-   "No relevant schemes found in the available database."
-7. Use the exact scheme name and website from the retrieved data.
-8. Answer in simple language.
-9. If multiple schemes exist, rank them by relevance.
-10. If eligibility or application process is not explicitly mentioned, write
-    "Not specified in available data".
-11. Include website links whenever they are available.
-12. Focus on schemes matching the user's state and category.
-
-For each scheme include:
-- Scheme Name
-- Benefits
-- Eligibility
-- Application Process
-- Official Website (if available)
-
-Output format:
-
-# Recommended Schemes
-
-## Scheme Name
-Benefits:
-Eligibility:
-How to Apply:
-Website:
-
-## Scheme Name
-Benefits:
-Eligibility:
-How to Apply:
-Website:
-"""
-
-        user_prompt = f"""
-USER QUESTION:
-{english_query}
-
-RETRIEVED SCHEMES:
-{context}
-
-The retrieved schemes ARE the answer.
-
-Instructions:
-1. Recommend the most relevant schemes first.
-2. Summarize benefits clearly.
-3. Mention eligibility if available.
-4. Explain how to apply.
-5. Include official website links.
-6. Do NOT say that information is unavailable if schemes are present.
-7. If multiple schemes are found, rank them by relevance.
-- Use ONLY the schemes shown below.
-- Do NOT generate additional schemes.
-- Do NOT generate websites that are not in the retrieved context.
-- If information is missing, write:
-  "Not specified in available data."
-"""
-
-        answer = await llm_service.generate(
-            system_prompt,
-            user_prompt,
-        )
+        if not retrieved:
+            answer = "No relevant schemes found in the available database."
+        else:
+            sections = ["# Recommended Schemes"]
+            for item in retrieved:
+                sections.append(_build_scheme_section(item))
+            answer = "\n\n".join(sections)
 
         answer = translation_service.translate_from_english(
             answer,
