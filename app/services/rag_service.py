@@ -6,6 +6,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
+from pypdf import filters
+
 from app.repositories.scheme_repository import scheme_repository
 from app.schemas.chat import Citation
 from app.schemas.profile import UserProfile
@@ -299,7 +301,6 @@ class RAGService:
             q += f" state:{state}"
 
         return q
-
     def build_where_filter(
         self,
         state: str | None = None,
@@ -309,14 +310,25 @@ class RAGService:
         where: Dict[str, Any] = {}
 
         if state:
-            where["state"] = normalize_state(state)
+            formatted_state = " ".join(
+                word.capitalize()
+                for word in state.replace("-", " ").split()
+            )
+
+            where["$or"] = [
+                {"state": formatted_state},
+                {"state": "Central"},
+            ]
 
         if filters:
-            for key in ("category", "level"):
-                if filters.get(key):
-                    where[key] = str(filters[key]).lower()
+            if filters.get("category"):
+                where["category"] = filters["category"]
 
-        return where or None
+            if filters.get("level"):
+                where["level"] = filters["level"]
+
+        return where if where else None
+
 
     def _apply_ranking_boosts(
         self,

@@ -22,8 +22,8 @@ if not logger.handlers:
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-CHROMA_PERSIST_DIR: str = os.getenv("CHROMA_PERSIST_DIR", "chroma_db")
-CHROMA_COLLECTION_NAME: str = os.getenv("CHROMA_COLLECTION_NAME", "government_schemes")
+CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "data/chroma")
+CHROMA_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "schemes")
 EMBEDDING_MODEL_NAME: str = os.getenv(
     "EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2"
 )
@@ -116,6 +116,9 @@ class SchemeRepository:
             self._collection = self._client.get_or_create_collection(
                 name=CHROMA_COLLECTION_NAME
             )
+            logger.info("Persist Directory : %s", CHROMA_PERSIST_DIR)
+            logger.info("Collection Name   : %s", CHROMA_COLLECTION_NAME)
+            logger.info("Collection Count  : %s", self._collection.count())
             logger.info(
                 "Connected to ChromaDB collection '%s' at '%s' (count=%s)",
                 CHROMA_COLLECTION_NAME,
@@ -152,16 +155,17 @@ class SchemeRepository:
         clauses: List[Dict[str, Any]] = []
 
         if state:
-            normalized_state = state.lower().strip().replace(" ", "-")
+            normalized_state = " ".join(word.capitalize() for word in state.replace("-", " ").split())
             clauses.append(
                 {
                     "$or": [
                         {"state": normalized_state},
+                        
                         {"state": "central"},
                     ]
                 }
             )
-
+        
         if extra_where:
             for key, value in extra_where.items():
                 if key == "state":
