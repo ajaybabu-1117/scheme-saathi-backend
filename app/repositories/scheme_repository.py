@@ -1,89 +1,218 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+import difflib
+import logging
+import os
+from typing import Any, Dict, List, Optional, Set
+
+import chromadb
+from chromadb.config import Settings
 
 from app.utils.text import clean_text
 
+logger = logging.getLogger("scheme_repository")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+CHROMA_PERSIST_DIR: str = os.getenv("CHROMA_PERSIST_DIR", "chroma_db")
+CHROMA_COLLECTION_NAME: str = os.getenv("CHROMA_COLLECTION_NAME", "government_schemes")
+
+FUZZY_THRESHOLD: float = 0.85
+FUZZY_PARTIAL_MULTIPLIER: float = 0.5
+
+FIELD_WEIGHTS: Dict[str, float] = {
+    "scheme_name": 6.0,
+    "keywords": 5.0,
+    "benefits": 4.0,
+    "eligibility": 3.0,
+    "description": 2.0,
+    "documents": 2.0,
+    "category": 1.5,
+    "state": 1.0,
+    "website": 1.0,
+}
+
+INTENT_KEYWORDS: Dict[str, List[str]] = {
+    "health": ["health", "medical", "hospital", "treatment", "ayushman", "disease", "doctor"],
+    "farmer": ["farmer", "farming", "agriculture", "crop", "kisan", "irrigation", "farmland"],
+    "education": ["education", "school", "college", "university", "study", "academic"],
+    "women": ["women", "woman", "girl", "mahila", "female", "widow"],
+    "business": ["business", "startup", "enterprise", "entrepreneur", "msme", "udyam"],
+    "employment": ["employment", "job", "jobs", "career", "unemployment", "work", "rojgar"],
+    "housing": ["housing", "house", "home", "awas", "shelter", "residential"],
+    "pension": ["pension", "retirement", "old age", "senior citizen"],
+    "disabled": ["disabled", "disability", "handicap", "divyang", "specially abled"],
+    "student": ["student", "students", "pupil", "learner"],
+    "scholarship": ["scholarship", "scholarships", "fellowship", "stipend"],
+    "loan": ["loan", "credit", "finance", "subsidy", "mudra"],
+    "insurance": ["insurance", "bima", "cover", "policy", "premium"],
+}
+
 
 class SchemeRepository:
-    DATA_FILE = Path(
-        "datasets/central/sample_schemes.json"
-    )
-
-    def _load_schemes(self) -> List[Dict[str, Any]]:
-        if not self.DATA_FILE.exists():
-            print(f"File not found: {self.DATA_FILE}")
-            return []
-
+    def __init__(self) -> None:
         try:
-            with open(
-                self.DATA_FILE,
-                "r",
-                encoding="utf-8",
-            ) as f:
-                data = json.load(f)
+            self._client = chromadb.PersistentClient(
+                path=CHROMA_PERSIST_DIR,
+                settings=Settings(anonymized_telemetry=False),
+            )
+            self._collection = self._client.get_or_create_collection(
+                name=CHROMA_COLLECTION_NAME
+            )
+            logger.info(
+                "Connected to ChromaDB collection '%s' at '%s' (count=%s)",
+                CHROMA_COLLECTION_NAME,
+                CHROMA_PERSIST_DIR,
+                self._safe_count(),
+            )
+        except Exception as exc:
+            logger.exception("Failed to initialize ChromaDB client: %s", exc)
+            raise
 
-            if isinstance(data, list):
-                print(f"Loaded {len(data)} schemes")
-                return data
+    def _safe_count(self) -> int:
+        try:
+            return self._collection.count()
+        except Exception:
+            return -1
 
-            return []
+    @staticmethod
+    def _build_state_where(
+        state: Optional[str],
+        extra_where: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        clauses: List[Dict[str, Any]] = []
 
-        except Exception as e:
-            print(f"Failed to load schemes: {e}")
-            return []
+        if state:
+            normalized_state = state.lower().strip().replace(" ", "-")
+            clauses.append(
+                {
+                    "$or": [
+                        {"state": normalized_state},
+                        {"state": "central"},
+                    ]
+                }
+            )
 
-    def list_chunks(
+        if extra_where:
+            for key, value in extra_where.items():
+                if key == "state":
+                    continue
+                clauses.append({key: value})
+
+        if not clauses:
+            return None
+
+        if len(clauses) == 1:
+            return clauses[0]
+
+        return {"$and": clauses}
+
+    def _detect_intent(self, query: str) -> Set[str]:
+        detected: Set[str] = set()
+        lowered = clean_text(query).lower()
+
+        for category, triggers in INTENT_KEYWORDS.items():
+            for trigger in triggers:
+                if trigger in lowered:
+                    detected.add(category)
+                    break
+
+        return detected
+
+    @staticmethod
+    def _tokenize(query: str) -> Set[str]:
+        return {
+            token
+            for token in clean_text(query).lower().split()
+            if len(token) > 2
+        }
+
+    @staticmethod
+    def _field_text(metadata: Dict[str, Any], field: str) -> str:
+        value = metadata.get(field, "")
+
+        if isinstance(value, (list, tuple, set)):
+            return clean_text(" ".join(str(v) for v in value)).lower()
+
+        return clean_text(str(value)).lower()
+
+    def _score_document(
         self,
-        where: Dict[str, Any] | None = None,
-    ) -> List[Dict[str, Any]]:
-        schemes = self._load_schemes()
+        tokens: Set[str],
+        document: str,
+        metadata: Dict[str, Any],
+        detected_categories: Set[str],
+    ) -> float:
+        score = 0.0
 
-        items = []
+        field_texts: Dict[str, str] = {
+            field: self._field_text(metadata, field)
+            for field in FIELD_WEIGHTS
+        }
+        field_texts["description"] = (
+            field_texts.get("description", "") or clean_text(document).lower()
+        )
 
-        for scheme in schemes:
-            if where:
-                skip = False
+        for field, weight in FIELD_WEIGHTS.items():
+            text = field_texts.get(field, "")
+            if not text:
+                continue
 
-                for key, value in where.items():
+            words = text.split()
 
-                    scheme_value = str(
-                        scheme.get(key, "")
-                    ).lower().replace(" ", "-")
-
-                    filter_value = str(
-                        value
-                    ).lower().replace(" ", "-")
-
-                    # Allow both state schemes and central schemes
-                    if key == "state":
-                        if (
-                            scheme_value != filter_value
-                            and scheme_value != "central"
-                        ):
-                            skip = True
-                            break
-                    else:
-                        if scheme_value != filter_value:
-                            skip = True
-                            break
-
-                if skip:
+            for token in tokens:
+                if token in text:
+                    score += weight
                     continue
 
+                for word in words:
+                    if len(word) < 3:
+                        continue
+                    ratio = difflib.SequenceMatcher(None, token, word).ratio()
+                    if ratio > FUZZY_THRESHOLD:
+                        score += weight * FUZZY_PARTIAL_MULTIPLIER
+                        break
+
+        if detected_categories:
+            category_value = str(metadata.get("category", "")).lower().strip()
+            if category_value in detected_categories:
+                score += FIELD_WEIGHTS["scheme_name"]
+
+        return score
+
+    def _get_all_items(
+        self,
+        where: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        try:
+            results = self._collection.get(
+                where=where,
+                include=["documents", "metadatas"],
+            )
+        except Exception as exc:
+            logger.exception("Failed to fetch items from ChromaDB: %s", exc)
+            return []
+
+        ids = results.get("ids", []) or []
+        documents = results.get("documents", []) or []
+        metadatas = results.get("metadatas", []) or []
+
+        items: List[Dict[str, Any]] = []
+
+        for idx, doc_id in enumerate(ids):
+            document = documents[idx] if idx < len(documents) else ""
+            metadata = metadatas[idx] if idx < len(metadatas) else {}
             items.append(
                 {
-                    "id": scheme.get(
-                        "id",
-                        scheme.get("scheme_id")
-                    ),
-                    "document": scheme.get(
-                        "description",
-                        ""
-                    ),
-                    "metadata": scheme,
+                    "id": doc_id,
+                    "document": document or "",
+                    "metadata": metadata or {},
                 }
             )
 
@@ -92,199 +221,212 @@ class SchemeRepository:
     def search_semantic(
         self,
         query: str,
-        where: Dict[str, Any] | None = None,
+        where: Optional[Dict[str, Any]] = None,
         top_k: int = 5,
     ) -> List[Dict[str, Any]]:
-        return self.search_keyword(
-            query=query,
-            where=where,
-            top_k=top_k,
-        )
+        if not query or not query.strip():
+            logger.warning("search_semantic called with empty query")
+            return []
+
+        try:
+            results = self._collection.query(
+                query_texts=[query],
+                n_results=top_k,
+                where=where,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception as exc:
+            logger.exception("search_semantic failed for query '%s': %s", query, exc)
+            return []
+
+        documents = (results.get("documents") or [[]])[0]
+        metadatas = (results.get("metadatas") or [[]])[0]
+        distances = (results.get("distances") or [[]])[0]
+
+        output: List[Dict[str, Any]] = []
+
+        for document, metadata, distance in zip(documents, metadatas, distances):
+            try:
+                similarity = 1.0 - float(distance)
+            except (TypeError, ValueError):
+                similarity = 0.0
+
+            similarity = max(0.0, min(1.0, similarity))
+
+            output.append(
+                {
+                    "document": document or "",
+                    "metadata": metadata or {},
+                    "score": similarity,
+                }
+            )
+
+        return output
 
     def search_keyword(
         self,
         query: str,
-        where: Dict[str, Any] | None = None,
+        where: Optional[Dict[str, Any]] = None,
         top_k: int = 5,
     ) -> List[Dict[str, Any]]:
-        tokens = {
-            token
-            for token in clean_text(query)
-            .lower()
-            .split()
-            if len(token) > 2
-        }
+        if not query or not query.strip():
+            logger.warning("search_keyword called with empty query")
+            return []
+
+        tokens = self._tokenize(query)
+        if not tokens:
+            return []
+
+        detected_categories = self._detect_intent(query)
+
+        items = self._get_all_items(where=where)
+        if not items:
+            return []
 
         scored: List[Dict[str, Any]] = []
 
-        for item in self.list_chunks(
-            where=where
-        ):
-            text = (
-                clean_text(
-                    item["document"]
-                )
-                + " "
-                + clean_text(
-                    str(
-                        item["metadata"].get(
-                            "scheme_name",
-                            ""
-                        )
-                    )
-                )
-                + " "
-                + clean_text(
-                    str(
-                        item["metadata"].get(
-                            "category",
-                            ""
-                        )
-                    )
-                )
-            ).lower()
-
-            overlap = sum(
-                1
-                for token in tokens
-                if token in text
+        for item in items:
+            score = self._score_document(
+                tokens=tokens,
+                document=item["document"],
+                metadata=item["metadata"],
+                detected_categories=detected_categories,
             )
 
-            if overlap:
+            if score > 0:
                 scored.append(
                     {
-                        "document": item[
-                            "document"
-                        ],
-                        "metadata": item[
-                            "metadata"
-                        ],
-                        "score": float(
-                            overlap
-                        ),
+                        "document": item["document"],
+                        "metadata": item["metadata"],
+                        "score": score,
                     }
                 )
 
-        return sorted(
-            scored,
-            key=lambda row: row["score"],
-            reverse=True,
-        )[:top_k]
+        scored.sort(key=lambda row: row["score"], reverse=True)
+        return scored[:top_k]
 
-    def get_scheme(
+    def search_by_state(
         self,
-        scheme_id: str,
-    ) -> Optional[Dict[str, Any]]:
-        chunks = self.list_chunks(
-            where={
-                "id": scheme_id
-            }
-        )
+        query: str,
+        state: str,
+        top_k: int = 5,
+        use_semantic: bool = True,
+    ) -> List[Dict[str, Any]]:
+        where = self._build_state_where(state=state, extra_where=None)
 
-        if not chunks:
+        if use_semantic:
+            return self.search_semantic(query=query, where=where, top_k=top_k)
+
+        return self.search_keyword(query=query, where=where, top_k=top_k)
+
+    def search_by_category(
+        self,
+        query: str,
+        category: str,
+        top_k: int = 5,
+        use_semantic: bool = True,
+    ) -> List[Dict[str, Any]]:
+        normalized_category = category.lower().strip().replace(" ", "-")
+        where = {"category": normalized_category}
+
+        if use_semantic:
+            return self.search_semantic(query=query, where=where, top_k=top_k)
+
+        return self.search_keyword(query=query, where=where, top_k=top_k)
+
+    def get_scheme(self, scheme_id: str) -> Optional[Dict[str, Any]]:
+        if not scheme_id:
+            logger.warning("get_scheme called with empty scheme_id")
             return None
 
-        first = chunks[0]["metadata"]
+        try:
+            result = self._collection.get(
+                ids=[scheme_id],
+                include=["documents", "metadatas"],
+            )
+        except Exception as exc:
+            logger.exception("get_scheme failed for id '%s': %s", scheme_id, exc)
+            result = None
+
+        metadata: Dict[str, Any] = {}
+        document: str = ""
+
+        if result and result.get("ids"):
+            document = (result.get("documents") or [""])[0] or ""
+            metadata = (result.get("metadatas") or [{}])[0] or {}
+        else:
+            try:
+                fallback = self._collection.get(
+                    where={"id": scheme_id},
+                    include=["documents", "metadatas"],
+                )
+            except Exception as exc:
+                logger.exception(
+                    "get_scheme fallback lookup failed for id '%s': %s", scheme_id, exc
+                )
+                fallback = None
+
+            if fallback and fallback.get("ids"):
+                document = (fallback.get("documents") or [""])[0] or ""
+                metadata = (fallback.get("metadatas") or [{}])[0] or {}
+
+        if not metadata:
+            logger.info("No scheme found for id '%s'", scheme_id)
+            return None
 
         return {
-            "scheme_id": first.get(
-                "id",
-                scheme_id
-            ),
-            "scheme_name": first.get(
-                "scheme_name"
-            ),
-            "description": chunks[0][
-                "document"
-            ],
-            "state": first.get(
-                "state"
-            ),
-            "category": first.get(
-                "category"
-            ),
-            "level": first.get(
-                "level"
-            ),
-            "website": first.get(
-                "website"
-            ),
-            "last_updated": first.get(
-                "last_updated"
-            ),
-            "source_file": first.get(
-                "source_file"
-            ),
-            "metadata": first,
-            "chunks": [
-                chunk["document"]
-                for chunk in chunks
-            ],
+            "scheme_id": metadata.get("id", scheme_id),
+            "scheme_name": metadata.get("scheme_name"),
+            "description": metadata.get("description", document),
+            "state": metadata.get("state"),
+            "category": metadata.get("category"),
+            "level": metadata.get("level"),
+            "website": metadata.get("website"),
+            "benefits": metadata.get("benefits"),
+            "eligibility": metadata.get("eligibility"),
+            "documents": metadata.get("documents"),
+            "keywords": metadata.get("keywords"),
+            "source_file": metadata.get("source_file"),
+            "metadata": metadata,
         }
 
     def aggregate_ranked(
         self,
-        ranked_chunks: List[
-            Dict[str, Any]
-        ],
+        ranked_chunks: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        best: Dict[
-            str,
-            Dict[str, Any],
-        ] = {}
+        if not ranked_chunks:
+            return []
+
+        best: Dict[str, Dict[str, Any]] = {}
 
         for row in ranked_chunks:
-            meta = row["metadata"]
+            metadata = row.get("metadata", {}) or {}
 
-            scheme_id = (
-                meta.get("id")
-                or meta.get("scheme_id")
-            )
+            scheme_id = metadata.get("id") or metadata.get("scheme_id")
+            if not scheme_id:
+                continue
 
-            current = best.get(
-                scheme_id
-            )
+            score = row.get("score", 0.0)
+            document = row.get("document", "") or ""
 
-            payload = {
+            current = best.get(scheme_id)
+
+            if current is not None and score <= current["score"]:
+                continue
+
+            best[scheme_id] = {
                 "scheme_id": scheme_id,
-                "scheme_name": meta.get(
-                    "scheme_name"
-                ),
-                "state": meta.get(
-                    "state"
-                ),
-                "category": meta.get(
-                    "category"
-                ),
-                "level": meta.get(
-                    "level"
-                ),
-                "website": meta.get(
-                    "website"
-                ),
-                "score": row["score"],
-                "snippet": row[
-                    "document"
-                ][:240],
-                "metadata": meta,
+                "scheme_name": metadata.get("scheme_name"),
+                "state": metadata.get("state"),
+                "category": metadata.get("category"),
+                "level": metadata.get("level"),
+                "website": metadata.get("website"),
+                "score": score,
+                "snippet": document[:240],
+                "metadata": metadata,
             }
 
-            if (
-                not current
-                or payload["score"]
-                > current["score"]
-            ):
-                best[
-                    scheme_id
-                ] = payload
-
-        return sorted(
-            best.values(),
-            key=lambda item: item[
-                "score"
-            ],
-            reverse=True,
-        )
+        return sorted(best.values(), key=lambda item: item["score"], reverse=True)
 
 
 scheme_repository = SchemeRepository()
