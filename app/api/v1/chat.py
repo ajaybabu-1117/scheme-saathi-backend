@@ -11,7 +11,6 @@ from app.schemas.profile import UserProfile
 from app.services.analytics_service import analytics_service
 from app.services.conversation_service import conversation_service
 from app.services.rag_service import rag_service
-from app.services.translation_service import translation_service
 from app.utils.states import detect_state
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
@@ -42,7 +41,7 @@ async def chat(
     )
 
     # -------------------------
-    # Get Conversation Memory
+    # Load Conversation
     # -------------------------
     conversation = conversation_service.get(
         conversation_id
@@ -61,37 +60,21 @@ async def chat(
         conversation.language = payload.language
 
     # -------------------------
-    # State Detection
+    # Detect State (Optional)
     # -------------------------
-    if not conversation.state:
+    detected_state = (
+        payload.state
+        or detect_state(payload.message)
+        or conversation.state
+    )
 
-        detected_state = (
-            payload.state
-            or detect_state(payload.message)
-        )
+    if detected_state:
+        conversation.state = detected_state
 
-        if detected_state:
-            conversation.state = detected_state
-            conversation.awaiting = None
-
-        else:
-            conversation.awaiting = "state"
-            conversation_service.save(conversation)
-
-            answer = translation_service.translate_from_english(
-                "Please tell me your state so I can recommend schemes specific to your state.",
-                target_language=conversation.language,
-            )
-
-            return ChatResponse(
-                answer=answer,
-                detected_state=None,
-                citations=[],
-                conversation_id=conversation_id,
-            )
+    conversation.awaiting = None
 
     # -------------------------
-    # Save Conversation State
+    # Save Conversation
     # -------------------------
     conversation_service.save(conversation)
 
@@ -116,7 +99,7 @@ async def chat(
         query=payload.message,
         language=conversation.language,
         user_profile=profile,
-        state=conversation.state,
+        state=conversation.state if conversation.state else None,
         filters=payload.filters,
     )
 
@@ -129,15 +112,21 @@ async def chat(
         result["answer"],
     )
 
+    # -------------------------
+    # Analytics
+    # -------------------------
     analytics_service.log_chat(
         payload.message,
         conversation_id,
         user_id,
     )
 
+    # -------------------------
+    # Response
+    # -------------------------
     return ChatResponse(
         answer=result["answer"],
-        detected_state=conversation.state,
+        detected_state=result.get("detected_state"),
         citations=result["citations"],
         conversation_id=conversation_id,
     )
