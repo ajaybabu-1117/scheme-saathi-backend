@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
 from app.repositories.scheme_repository import scheme_repository
@@ -37,6 +39,16 @@ CATEGORY_EXPANSIONS: Dict[str, tuple[list[str], str]] = {
         merit scholarship
         education assistance
         student welfare
+        """,
+    ),
+    "education": (
+        ["education", "study", "school", "college", "academic"],
+        """
+        education assistance
+        scholarship
+        fee waiver
+        study support
+        academic assistance
         """,
     ),
     "pension": (
@@ -78,6 +90,67 @@ CATEGORY_EXPANSIONS: Dict[str, tuple[list[str], str]] = {
         business assistance
         """,
     ),
+    "employment": (
+        ["employment", "job", "jobs", "work", "career", "unemployed"],
+        """
+        employment scheme
+        skill development
+        job training
+        livelihood
+        self employment
+        """,
+    ),
+    "housing": (
+        ["housing", "house", "home", "shelter", "awas"],
+        """
+        housing scheme
+        pradhan mantri awas yojana
+        home loan subsidy
+        housing assistance
+        """,
+    ),
+    "loan": (
+        ["loan", "credit", "mudra", "subsidy"],
+        """
+        loan scheme
+        mudra loan
+        credit subsidy
+        business loan
+        """,
+    ),
+    "insurance": (
+        ["insurance", "policy", "premium", "cover", "bima"],
+        """
+        insurance scheme
+        life insurance
+        accident insurance
+        insurance cover
+        """,
+    ),
+    "scholarship": (
+        ["scholarship", "fellowship", "stipend"],
+        """
+        scholarship scheme
+        pre matric scholarship
+        post matric scholarship
+        merit scholarship
+        """,
+    ),
+    "disabled": (
+        ["disabled", "disability", "divyang", "handicap"],
+        """
+        disability pension
+        divyang scheme
+        disability assistance
+        accessibility support
+        """,
+    ),
+}
+
+ATTRIBUTE_CATEGORY_MAP: Dict[str, str] = {
+    "farmer": "farmer",
+    "student": "student",
+    "business": "business",
 }
 
 
@@ -85,6 +158,82 @@ def _contains_word(text: str, phrase: str) -> bool:
     """Whole-word/phrase match so 'farmer' doesn't match inside 'farmerish' etc."""
     pattern = r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"
     return re.search(pattern, text) is not None
+
+
+def _detect_categories(query: str) -> List[str]:
+    q = clean_text(query).lower()
+    detected: List[str] = []
+
+    for category, (keywords, _expansion) in CATEGORY_EXPANSIONS.items():
+        if any(_contains_word(q, kw) for kw in keywords):
+            detected.append(category)
+
+    return detected
+
+
+def _extract_beneficiary_attributes(query: str) -> Dict[str, str]:
+    q = clean_text(query).lower()
+    attributes: Dict[str, str] = {}
+
+    if any(_contains_word(q, w) for w in ("woman", "women", "female", "girl")):
+        attributes["gender"] = "female"
+    elif any(_contains_word(q, w) for w in ("man", "men", "male", "boy")):
+        attributes["gender"] = "male"
+
+    if any(_contains_word(q, w) for w in ("farmer", "kisan", "agriculture")):
+        attributes["occupation"] = "farmer"
+    elif any(_contains_word(q, w) for w in ("student", "scholar", "pupil")):
+        attributes["occupation"] = "student"
+    elif any(_contains_word(q, w) for w in ("business", "entrepreneur", "startup")):
+        attributes["occupation"] = "business"
+    elif any(_contains_word(q, w) for w in ("unemployed", "jobless", "job seeker")):
+        attributes["occupation"] = "unemployed"
+
+    if any(_contains_word(q, w) for w in ("disabled", "disability", "divyang", "handicap")):
+        attributes["disability"] = "yes"
+
+    if any(_contains_word(q, w) for w in ("widow", "widower")):
+        attributes["marital_status"] = "widow"
+    elif _contains_word(q, "married"):
+        attributes["marital_status"] = "married"
+
+    if any(
+        _contains_word(q, w)
+        for w in ("senior citizen", "old age", "elderly", "retired")
+    ):
+        attributes["age_group"] = "senior"
+    elif any(_contains_word(q, w) for w in ("child", "children", "minor")):
+        attributes["age_group"] = "minor"
+
+    if any(
+        _contains_word(q, w)
+        for w in ("bpl", "below poverty line", "low income", "poor")
+    ):
+        attributes["income_group"] = "low"
+
+    if any(
+        _contains_word(q, w)
+        for w in ("graduate", "post graduate", "phd", "engineering")
+    ):
+        attributes["education_level"] = "higher"
+    elif any(_contains_word(q, w) for w in ("school", "primary", "secondary")):
+        attributes["education_level"] = "school"
+
+    return attributes
+
+
+def _infer_category_from_attributes(attributes: Dict[str, str]) -> str | None:
+    occupation = attributes.get("occupation")
+    if occupation in ATTRIBUTE_CATEGORY_MAP:
+        return ATTRIBUTE_CATEGORY_MAP[occupation]
+
+    if attributes.get("disability") == "yes":
+        return "disabled"
+
+    if attributes.get("age_group") == "senior":
+        return "pension"
+
+    return None
 
 
 def _build_scheme_section(item: Dict[str, Any]) -> str:
@@ -116,12 +265,16 @@ def _build_scheme_section(item: Dict[str, Any]) -> str:
     # Website: item.get("website"), else not specified.
     website = item.get("website") or NOT_SPECIFIED
 
+    # State: item.get("state"), else metadata fallback, else not specified.
+    state = item.get("state") or metadata.get("state") or NOT_SPECIFIED
+
     return (
         f"## {scheme_name}\n"
         f"Benefits: {benefits}\n"
         f"Eligibility: {eligibility}\n"
         f"How to Apply: {how_to_apply}\n"
-        f"Website: {website}"
+        f"Website: {website}\n"
+        f"State: {state}"
     )
 
 
@@ -165,45 +318,33 @@ class RAGService:
 
         return where or None
 
-    def retrieve(
+    def _apply_ranking_boosts(
         self,
+        combined: List[Dict[str, Any]],
         query: str,
-        state: str | None = None,
-        filters: Dict[str, Any] | None = None,
-        top_k: int = 10,
+        state: str | None,
     ) -> List[Dict[str, Any]]:
 
-        where = self.build_where_filter(state=state, filters=filters)
+        query_words = [
+            word for word in clean_text(query).lower().split() if len(word) > 2
+        ]
 
-        semantic = scheme_repository.search_semantic(
-            query,
-            where=where,
-            top_k=top_k,
-        )
-
-        lexical = scheme_repository.search_keyword(
-            query,
-            where=where,
-            top_k=top_k,
-        )
-
-        combined = semantic + lexical
-
-        query_words = query.lower().split()
+        normalized_state = normalize_state(state) if state else None
 
         for row in combined:
-
-            meta = row.get("metadata", {})
-
+            meta = row.get("metadata", {}) or {}
             boost = 0.0
 
-            if state and meta.get("state") == normalize_state(state):
+            if normalized_state and meta.get("state") == normalized_state:
                 boost += 1.0
 
+            if str(meta.get("level", "")).lower() == "central":
+                boost += 0.5
+
             text = (
-                str(row.get("snippet", ""))
+                str(row.get("document", ""))
                 + " "
-                + str(row.get("scheme_name", ""))
+                + str(meta.get("scheme_name", ""))
             ).lower()
 
             for word in query_words:
@@ -212,13 +353,83 @@ class RAGService:
 
             row["score"] = float(row.get("score", 0)) + boost
 
-        ranked = sorted(
-            combined,
-            key=lambda item: item.get("score", 0),
-            reverse=True,
+        return combined
+
+    def retrieve(
+        self,
+        query: str,
+        state: str | None = None,
+        filters: Dict[str, Any] | None = None,
+        top_k: int = 10,
+    ) -> List[Dict[str, Any]]:
+
+        start_time = time.perf_counter()
+
+        where = self.build_where_filter(state=state, filters=filters)
+
+        detected_categories = _detect_categories(query)
+        attributes = _extract_beneficiary_attributes(query)
+
+        if filters and filters.get("category"):
+            preferred_category = str(filters["category"])
+        elif detected_categories:
+            preferred_category = detected_categories[0]
+        else:
+            preferred_category = _infer_category_from_attributes(attributes)
+
+        semantic_results: List[Dict[str, Any]] = []
+        keyword_results: List[Dict[str, Any]] = []
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            semantic_future = executor.submit(
+                scheme_repository.search_semantic,
+                query,
+                where=where,
+                top_k=top_k,
+            )
+            keyword_future = executor.submit(
+                scheme_repository.search_keyword,
+                query,
+                where=where,
+                top_k=top_k,
+                preferred_state=state,
+                preferred_category=preferred_category,
+            )
+
+            try:
+                semantic_results = semantic_future.result()
+            except Exception as exc:
+                logger.exception("Semantic search failed: %s", exc)
+                semantic_results = []
+
+            try:
+                keyword_results = keyword_future.result()
+            except Exception as exc:
+                logger.exception("Keyword (hybrid) search failed: %s", exc)
+                keyword_results = []
+
+        logger.info(
+            "Detected categories=%s | attributes=%s | semantic_results=%d | keyword_results=%d",
+            detected_categories,
+            attributes,
+            len(semantic_results),
+            len(keyword_results),
         )
 
-        return scheme_repository.aggregate_ranked(ranked)[:top_k]
+        combined = semantic_results + keyword_results
+
+        ranked = self._apply_ranking_boosts(combined, query=query, state=state)
+
+        aggregated = scheme_repository.aggregate_ranked(ranked)[:top_k]
+
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            "retrieve() completed in %.3fs | %d schemes selected",
+            elapsed,
+            len(aggregated),
+        )
+
+        return aggregated
 
     async def answer(
         self,
@@ -229,6 +440,8 @@ class RAGService:
         filters: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
 
+        start_time = time.perf_counter()
+
         english_query = translation_service.translate_to_english(
             query,
             source_language=language,
@@ -236,8 +449,8 @@ class RAGService:
 
         detected_state = (
             state
-            or detect_state(english_query)
             or (user_profile.state if user_profile else None)
+            or detect_state(english_query)
         )
 
         if detected_state:
@@ -249,11 +462,20 @@ class RAGService:
             explicit_state=detected_state,
         )
 
+        detected_categories = _detect_categories(enhanced_query)
+
         retrieved = self.retrieve(
             enhanced_query,
             state=detected_state,
             filters=filters,
             top_k=10,
+        )
+
+        logger.info(
+            "Detected intent categories=%s | detected_state=%s | selected_schemes=%d",
+            detected_categories,
+            detected_state,
+            len(retrieved),
         )
 
         if logger.isEnabledFor(logging.DEBUG):
@@ -271,8 +493,16 @@ class RAGService:
                 )
 
         citations: List[Citation] = []
+        seen_scheme_ids: set[str] = set()
 
         for item in retrieved:
+
+            scheme_id = str(item.get("scheme_id", ""))
+
+            if scheme_id in seen_scheme_ids:
+                continue
+
+            seen_scheme_ids.add(scheme_id)
 
             scheme_name = (
                 item.get("scheme_name")
@@ -282,7 +512,7 @@ class RAGService:
 
             citations.append(
                 Citation(
-                    scheme_id=str(item.get("scheme_id", "")),
+                    scheme_id=scheme_id,
                     scheme_name=str(scheme_name),
                     website=item.get("website"),
                     source_file=item.get("metadata", {}).get("source_file"),
@@ -302,6 +532,9 @@ class RAGService:
             answer,
             target_language=language,
         )
+
+        elapsed = time.perf_counter() - start_time
+        logger.info("answer() completed in %.3fs", elapsed)
 
         return {
             "answer": answer,
