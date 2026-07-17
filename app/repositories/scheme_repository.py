@@ -3,10 +3,12 @@ from __future__ import annotations
 import difflib
 import logging
 import os
-from typing import Any, Dict, List, Optional, Set
+from functools import lru_cache
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 import chromadb
 from chromadb.config import Settings
+from sentence_transformers import SentenceTransformer
 
 from app.utils.text import clean_text
 
@@ -22,9 +24,21 @@ logger.setLevel(logging.INFO)
 
 CHROMA_PERSIST_DIR: str = os.getenv("CHROMA_PERSIST_DIR", "chroma_db")
 CHROMA_COLLECTION_NAME: str = os.getenv("CHROMA_COLLECTION_NAME", "government_schemes")
+EMBEDDING_MODEL_NAME: str = os.getenv(
+    "EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2"
+)
 
 FUZZY_THRESHOLD: float = 0.85
 FUZZY_PARTIAL_MULTIPLIER: float = 0.5
+FUZZY_MAX_WORDS_PER_FIELD: int = 60
+FUZZY_MAX_LENGTH_DELTA: int = 2
+
+SEMANTIC_CANDIDATE_POOL: int = int(os.getenv("SEMANTIC_CANDIDATE_POOL", "150"))
+
+INTENT_BONUS: float = 6.0
+CATEGORY_MATCH_BONUS: float = 3.0
+STATE_MATCH_BONUS: float = 3.0
+CENTRAL_LEVEL_BONUS: float = 1.0
 
 FIELD_WEIGHTS: Dict[str, float] = {
     "scheme_name": 6.0,
@@ -39,19 +53,56 @@ FIELD_WEIGHTS: Dict[str, float] = {
 }
 
 INTENT_KEYWORDS: Dict[str, List[str]] = {
-    "health": ["health", "medical", "hospital", "treatment", "ayushman", "disease", "doctor"],
-    "farmer": ["farmer", "farming", "agriculture", "crop", "kisan", "irrigation", "farmland"],
-    "education": ["education", "school", "college", "university", "study", "academic"],
-    "women": ["women", "woman", "girl", "mahila", "female", "widow"],
-    "business": ["business", "startup", "enterprise", "entrepreneur", "msme", "udyam"],
-    "employment": ["employment", "job", "jobs", "career", "unemployment", "work", "rojgar"],
-    "housing": ["housing", "house", "home", "awas", "shelter", "residential"],
-    "pension": ["pension", "retirement", "old age", "senior citizen"],
-    "disabled": ["disabled", "disability", "handicap", "divyang", "specially abled"],
-    "student": ["student", "students", "pupil", "learner"],
-    "scholarship": ["scholarship", "scholarships", "fellowship", "stipend"],
-    "loan": ["loan", "credit", "finance", "subsidy", "mudra"],
-    "insurance": ["insurance", "bima", "cover", "policy", "premium"],
+    "health": [
+        "health", "medical", "medicine", "doctor", "hospital", "clinic",
+        "healthcare", "treatment", "disease", "insurance", "operation",
+        "surgery", "family health", "ayushman", "wellness", "patient",
+    ],
+    "farmer": [
+        "farmer", "farming", "agriculture", "crop", "cultivation", "kisan",
+        "irrigation", "soil", "seed", "fertilizer", "farm", "farmland",
+        "harvest", "agri",
+    ],
+    "education": [
+        "education", "student", "school", "college", "university", "study",
+        "academic", "hostel", "tuition", "exam", "learning",
+    ],
+    "women": [
+        "women", "woman", "girl", "female", "widow", "mother", "mahila",
+        "daughter", "pregnant", "maternity",
+    ],
+    "business": [
+        "business", "startup", "enterprise", "entrepreneur", "msme", "udyam",
+        "trade", "industry", "venture",
+    ],
+    "employment": [
+        "employment", "job", "jobs", "career", "work", "salary", "skill",
+        "livelihood", "placement", "training", "unemployment", "rojgar",
+        "wages",
+    ],
+    "housing": [
+        "housing", "house", "home", "property", "shelter", "awas",
+        "residential", "dwelling",
+    ],
+    "pension": [
+        "pension", "retirement", "old age", "senior citizen", "elderly",
+    ],
+    "disabled": [
+        "disabled", "disability", "divyang", "special needs", "handicap",
+        "specially abled", "differently abled",
+    ],
+    "student": [
+        "student", "students", "pupil", "learner", "scholar",
+    ],
+    "scholarship": [
+        "scholarship", "scholarships", "fellowship", "stipend", "grant",
+    ],
+    "loan": [
+        "loan", "credit", "finance", "subsidy", "mudra", "funding", "borrow",
+    ],
+    "insurance": [
+        "insurance", "policy", "premium", "cover", "bima", "claim",
+    ],
 }
 
 
@@ -74,6 +125,18 @@ class SchemeRepository:
         except Exception as exc:
             logger.exception("Failed to initialize ChromaDB client: %s", exc)
             raise
+
+        try:
+            self._embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
+            logger.info("Loaded embedding model '%s'", EMBEDDING_MODEL_NAME)
+        except Exception as exc:
+            logger.exception(
+                "Failed to load embedding model '%s': %s", EMBEDDING_MODEL_NAME, exc
+            )
+            raise
+
+        self._scheme_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+        self._all_items_cache: Optional[List[Dict[str, Any]]] = None
 
     def _safe_count(self) -> int:
         try:
@@ -113,25 +176,32 @@ class SchemeRepository:
 
         return {"$and": clauses}
 
-    def _detect_intent(self, query: str) -> Set[str]:
-        detected: Set[str] = set()
+    @staticmethod
+    @lru_cache(maxsize=4096)
+    def _normalize_text(value: str) -> str:
+        return value.lower().strip().replace("-", " ").replace("_", " ")
+
+    @lru_cache(maxsize=512)
+    def _detect_intent(self, query: str) -> FrozenSet[str]:
+        detected: List[str] = []
         lowered = clean_text(query).lower()
 
         for category, triggers in INTENT_KEYWORDS.items():
             for trigger in triggers:
                 if trigger in lowered:
-                    detected.add(category)
+                    detected.append(category)
                     break
 
-        return detected
+        return frozenset(detected)
 
     @staticmethod
-    def _tokenize(query: str) -> Set[str]:
-        return {
+    @lru_cache(maxsize=2048)
+    def _tokenize(query: str) -> FrozenSet[str]:
+        return frozenset(
             token
             for token in clean_text(query).lower().split()
             if len(token) > 2
-        }
+        )
 
     @staticmethod
     def _field_text(metadata: Dict[str, Any], field: str) -> str:
@@ -144,10 +214,9 @@ class SchemeRepository:
 
     def _score_document(
         self,
-        tokens: Set[str],
+        tokens: FrozenSet[str],
         document: str,
         metadata: Dict[str, Any],
-        detected_categories: Set[str],
     ) -> float:
         score = 0.0
 
@@ -155,41 +224,140 @@ class SchemeRepository:
             field: self._field_text(metadata, field)
             for field in FIELD_WEIGHTS
         }
-        field_texts["description"] = (
-            field_texts.get("description", "") or clean_text(document).lower()
-        )
+        if not field_texts.get("description"):
+            field_texts["description"] = clean_text(document).lower()
+
+        field_words_cache: Dict[str, List[str]] = {}
 
         for field, weight in FIELD_WEIGHTS.items():
             text = field_texts.get(field, "")
             if not text:
                 continue
 
-            words = text.split()
+            unmatched_tokens: List[str] = []
 
             for token in tokens:
                 if token in text:
                     score += weight
-                    continue
+                else:
+                    unmatched_tokens.append(token)
 
+            if not unmatched_tokens:
+                continue
+
+            if field not in field_words_cache:
+                field_words_cache[field] = text.split()[:FUZZY_MAX_WORDS_PER_FIELD]
+
+            words = field_words_cache[field]
+
+            for token in unmatched_tokens:
                 for word in words:
-                    if len(word) < 3:
+                    if abs(len(word) - len(token)) > FUZZY_MAX_LENGTH_DELTA:
                         continue
                     ratio = difflib.SequenceMatcher(None, token, word).ratio()
                     if ratio > FUZZY_THRESHOLD:
                         score += weight * FUZZY_PARTIAL_MULTIPLIER
                         break
 
-        if detected_categories:
-            category_value = str(metadata.get("category", "")).lower().strip()
-            if category_value in detected_categories:
-                score += FIELD_WEIGHTS["scheme_name"]
-
         return score
+
+    def _compute_bonus(
+        self,
+        metadata: Dict[str, Any],
+        detected_categories: FrozenSet[str],
+        preferred_state: Optional[str],
+        preferred_category: Optional[str],
+    ) -> float:
+        bonus = 0.0
+
+        category_value = self._normalize_text(str(metadata.get("category", "")))
+        state_value = self._normalize_text(str(metadata.get("state", "")))
+        level_value = self._normalize_text(str(metadata.get("level", "")))
+
+        if detected_categories and category_value in detected_categories:
+            bonus += INTENT_BONUS
+
+        if preferred_category and category_value == preferred_category:
+            bonus += CATEGORY_MATCH_BONUS
+
+        if preferred_state and state_value == preferred_state:
+            bonus += STATE_MATCH_BONUS
+
+        if level_value == "central":
+            bonus += CENTRAL_LEVEL_BONUS
+
+        return bonus
+
+    @staticmethod
+    def _normalize_distance(distance: Any) -> float:
+        try:
+            distance_value = float(distance)
+        except (TypeError, ValueError):
+            return 0.0
+
+        if distance_value < 0:
+            distance_value = 0.0
+
+        return 1.0 / (1.0 + distance_value)
+
+    @lru_cache(maxsize=256)
+    def _embed_query(self, query: str) -> Tuple[float, ...]:
+        vector = self._embedder.encode(query, normalize_embeddings=True)
+        return tuple(float(x) for x in vector)
+
+    def _get_semantic_candidates(
+        self,
+        query: str,
+        where: Optional[Dict[str, Any]] = None,
+        pool_size: int = SEMANTIC_CANDIDATE_POOL,
+    ) -> List[Dict[str, Any]]:
+        try:
+            embedding = list(self._embed_query(query))
+        except Exception as exc:
+            logger.exception("Failed to embed query '%s': %s", query, exc)
+            return []
+
+        try:
+            results = self._collection.query(
+                query_embeddings=[embedding],
+                n_results=pool_size,
+                where=where,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception as exc:
+            logger.exception(
+                "Semantic candidate retrieval failed for query '%s': %s", query, exc
+            )
+            return []
+
+        documents = (results.get("documents") or [[]])[0]
+        metadatas = (results.get("metadatas") or [[]])[0]
+        distances = (results.get("distances") or [[]])[0]
+
+        candidates: List[Dict[str, Any]] = []
+
+        for document, metadata, distance in zip(documents, metadatas, distances):
+            try:
+                candidates.append(
+                    {
+                        "document": document or "",
+                        "metadata": metadata or {},
+                        "semantic_score": self._normalize_distance(distance),
+                    }
+                )
+            except Exception as exc:
+                logger.warning("Skipping malformed candidate: %s", exc)
+                continue
+
+        return candidates
 
     def _get_all_items(
         self,
         where: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
+        if where is None and self._all_items_cache is not None:
+            return self._all_items_cache
+
         try:
             results = self._collection.get(
                 where=where,
@@ -206,17 +374,53 @@ class SchemeRepository:
         items: List[Dict[str, Any]] = []
 
         for idx, doc_id in enumerate(ids):
-            document = documents[idx] if idx < len(documents) else ""
-            metadata = metadatas[idx] if idx < len(metadatas) else {}
-            items.append(
-                {
-                    "id": doc_id,
-                    "document": document or "",
-                    "metadata": metadata or {},
-                }
-            )
+            try:
+                document = documents[idx] if idx < len(documents) else ""
+                metadata = metadatas[idx] if idx < len(metadatas) else {}
+                items.append(
+                    {
+                        "id": doc_id,
+                        "document": document or "",
+                        "metadata": metadata or {},
+                    }
+                )
+            except Exception as exc:
+                logger.warning("Skipping malformed item at index %s: %s", idx, exc)
+                continue
+
+        if where is None:
+            self._all_items_cache = items
 
         return items
+
+    @lru_cache(maxsize=1)
+    def _category_state_index(self) -> Dict[str, FrozenSet[str]]:
+        try:
+            result = self._collection.get(include=["metadatas"])
+        except Exception as exc:
+            logger.exception("Failed to build category/state index: %s", exc)
+            return {"categories": frozenset(), "states": frozenset()}
+
+        categories: List[str] = []
+        states: List[str] = []
+
+        for metadata in result.get("metadatas", []) or []:
+            try:
+                if metadata.get("category"):
+                    categories.append(self._normalize_text(str(metadata["category"])))
+                if metadata.get("state"):
+                    states.append(self._normalize_text(str(metadata["state"])))
+            except Exception as exc:
+                logger.warning("Skipping malformed metadata during indexing: %s", exc)
+                continue
+
+        return {"categories": frozenset(categories), "states": frozenset(states)}
+
+    def get_available_categories(self) -> List[str]:
+        return sorted(self._category_state_index()["categories"])
+
+    def get_available_states(self) -> List[str]:
+        return sorted(self._category_state_index()["states"])
 
     def search_semantic(
         self,
@@ -229,8 +433,14 @@ class SchemeRepository:
             return []
 
         try:
+            embedding = list(self._embed_query(query))
+        except Exception as exc:
+            logger.exception("Failed to embed query '%s': %s", query, exc)
+            return []
+
+        try:
             results = self._collection.query(
-                query_texts=[query],
+                query_embeddings=[embedding],
                 n_results=top_k,
                 where=where,
                 include=["documents", "metadatas", "distances"],
@@ -247,19 +457,16 @@ class SchemeRepository:
 
         for document, metadata, distance in zip(documents, metadatas, distances):
             try:
-                similarity = 1.0 - float(distance)
-            except (TypeError, ValueError):
-                similarity = 0.0
-
-            similarity = max(0.0, min(1.0, similarity))
-
-            output.append(
-                {
-                    "document": document or "",
-                    "metadata": metadata or {},
-                    "score": similarity,
-                }
-            )
+                output.append(
+                    {
+                        "document": document or "",
+                        "metadata": metadata or {},
+                        "score": self._normalize_distance(distance),
+                    }
+                )
+            except Exception as exc:
+                logger.warning("Skipping malformed semantic result: %s", exc)
+                continue
 
         return output
 
@@ -268,6 +475,8 @@ class SchemeRepository:
         query: str,
         where: Optional[Dict[str, Any]] = None,
         top_k: int = 5,
+        preferred_state: Optional[str] = None,
+        preferred_category: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         if not query or not query.strip():
             logger.warning("search_keyword called with empty query")
@@ -278,29 +487,57 @@ class SchemeRepository:
             return []
 
         detected_categories = self._detect_intent(query)
+        normalized_preferred_state = (
+            self._normalize_text(preferred_state) if preferred_state else None
+        )
+        normalized_preferred_category = (
+            self._normalize_text(preferred_category) if preferred_category else None
+        )
 
-        items = self._get_all_items(where=where)
-        if not items:
-            return []
+        candidates = self._get_semantic_candidates(
+            query=query, where=where, pool_size=SEMANTIC_CANDIDATE_POOL
+        )
+
+        if not candidates:
+            logger.info(
+                "Semantic candidate retrieval empty for query '%s', falling back to filtered scan",
+                query,
+            )
+            candidates = self._get_all_items(where=where)
+            for candidate in candidates:
+                candidate["semantic_score"] = 0.0
 
         scored: List[Dict[str, Any]] = []
 
-        for item in items:
-            score = self._score_document(
-                tokens=tokens,
-                document=item["document"],
-                metadata=item["metadata"],
-                detected_categories=detected_categories,
-            )
+        for candidate in candidates:
+            try:
+                metadata = candidate.get("metadata", {}) or {}
+                document = candidate.get("document", "") or ""
+                semantic_score = float(candidate.get("semantic_score", 0.0))
 
-            if score > 0:
-                scored.append(
-                    {
-                        "document": item["document"],
-                        "metadata": item["metadata"],
-                        "score": score,
-                    }
+                keyword_score = self._score_document(
+                    tokens=tokens, document=document, metadata=metadata
                 )
+                bonus = self._compute_bonus(
+                    metadata=metadata,
+                    detected_categories=detected_categories,
+                    preferred_state=normalized_preferred_state,
+                    preferred_category=normalized_preferred_category,
+                )
+
+                final_score = semantic_score + keyword_score + bonus
+
+                if final_score > 0:
+                    scored.append(
+                        {
+                            "document": document,
+                            "metadata": metadata,
+                            "score": final_score,
+                        }
+                    )
+            except Exception as exc:
+                logger.warning("Skipping malformed record during keyword scoring: %s", exc)
+                continue
 
         scored.sort(key=lambda row: row["score"], reverse=True)
         return scored[:top_k]
@@ -310,21 +547,23 @@ class SchemeRepository:
         query: str,
         state: str,
         top_k: int = 5,
-        use_semantic: bool = True,
+        use_semantic: bool = False,
     ) -> List[Dict[str, Any]]:
         where = self._build_state_where(state=state, extra_where=None)
 
         if use_semantic:
             return self.search_semantic(query=query, where=where, top_k=top_k)
 
-        return self.search_keyword(query=query, where=where, top_k=top_k)
+        return self.search_keyword(
+            query=query, where=where, top_k=top_k, preferred_state=state
+        )
 
     def search_by_category(
         self,
         query: str,
         category: str,
         top_k: int = 5,
-        use_semantic: bool = True,
+        use_semantic: bool = False,
     ) -> List[Dict[str, Any]]:
         normalized_category = category.lower().strip().replace(" ", "-")
         where = {"category": normalized_category}
@@ -332,12 +571,18 @@ class SchemeRepository:
         if use_semantic:
             return self.search_semantic(query=query, where=where, top_k=top_k)
 
-        return self.search_keyword(query=query, where=where, top_k=top_k)
+        return self.search_keyword(
+            query=query, where=where, top_k=top_k, preferred_category=category
+        )
 
     def get_scheme(self, scheme_id: str) -> Optional[Dict[str, Any]]:
         if not scheme_id:
             logger.warning("get_scheme called with empty scheme_id")
             return None
+
+        if scheme_id in self._scheme_cache:
+            cached = self._scheme_cache[scheme_id]
+            return dict(cached) if cached else None
 
         try:
             result = self._collection.get(
@@ -372,9 +617,10 @@ class SchemeRepository:
 
         if not metadata:
             logger.info("No scheme found for id '%s'", scheme_id)
+            self._scheme_cache[scheme_id] = None
             return None
 
-        return {
+        payload = {
             "scheme_id": metadata.get("id", scheme_id),
             "scheme_name": metadata.get("scheme_name"),
             "description": metadata.get("description", document),
@@ -390,6 +636,9 @@ class SchemeRepository:
             "metadata": metadata,
         }
 
+        self._scheme_cache[scheme_id] = payload
+        return dict(payload)
+
     def aggregate_ranked(
         self,
         ranked_chunks: List[Dict[str, Any]],
@@ -400,31 +649,35 @@ class SchemeRepository:
         best: Dict[str, Dict[str, Any]] = {}
 
         for row in ranked_chunks:
-            metadata = row.get("metadata", {}) or {}
+            try:
+                metadata = row.get("metadata", {}) or {}
 
-            scheme_id = metadata.get("id") or metadata.get("scheme_id")
-            if not scheme_id:
+                scheme_id = metadata.get("id") or metadata.get("scheme_id")
+                if not scheme_id:
+                    continue
+
+                score = row.get("score", 0.0)
+                document = row.get("document", "") or ""
+
+                current = best.get(scheme_id)
+
+                if current is not None and score <= current["score"]:
+                    continue
+
+                best[scheme_id] = {
+                    "scheme_id": scheme_id,
+                    "scheme_name": metadata.get("scheme_name"),
+                    "state": metadata.get("state"),
+                    "category": metadata.get("category"),
+                    "level": metadata.get("level"),
+                    "website": metadata.get("website"),
+                    "score": score,
+                    "snippet": document[:240],
+                    "metadata": metadata,
+                }
+            except Exception as exc:
+                logger.warning("Skipping malformed ranked chunk during aggregation: %s", exc)
                 continue
-
-            score = row.get("score", 0.0)
-            document = row.get("document", "") or ""
-
-            current = best.get(scheme_id)
-
-            if current is not None and score <= current["score"]:
-                continue
-
-            best[scheme_id] = {
-                "scheme_id": scheme_id,
-                "scheme_name": metadata.get("scheme_name"),
-                "state": metadata.get("state"),
-                "category": metadata.get("category"),
-                "level": metadata.get("level"),
-                "website": metadata.get("website"),
-                "score": score,
-                "snippet": document[:240],
-                "metadata": metadata,
-            }
 
         return sorted(best.values(), key=lambda item: item["score"], reverse=True)
 
