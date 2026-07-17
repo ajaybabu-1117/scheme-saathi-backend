@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import re
-
 
 class LLMService:
     """
     Offline response generator.
-
-    Uses only the retrieved scheme context from RAG.
-    No external LLMs or APIs.
+    Uses only retrieved schemes from ChromaDB/database.
+    No OpenRouter or external APIs.
     """
 
     async def generate(
@@ -16,9 +13,16 @@ class LLMService:
         system_prompt: str,
         user_prompt: str,
     ) -> str:
-        marker = "CONTEXT:"
 
-        if marker not in user_prompt:
+        # Accept both markers
+        marker = None
+
+        if "RETRIEVED SCHEMES:" in user_prompt:
+            marker = "RETRIEVED SCHEMES:"
+        elif "CONTEXT:" in user_prompt:
+            marker = "CONTEXT:"
+
+        if marker is None:
             return "No relevant schemes found in the available database."
 
         context = user_prompt.split(marker, 1)[1].strip()
@@ -26,34 +30,20 @@ class LLMService:
         if not context:
             return "No relevant schemes found in the available database."
 
-        return self._format_response(context)
+        return self._format_answer(context)
 
-    def _format_response(self, context: str) -> str:
+    def _format_answer(self, context: str) -> str:
         """
-        Converts retrieved context into a clean response.
+        Convert retrieved schemes into a readable response.
         """
 
-        text = context.strip()
+        lines = [
+            "# Recommended Schemes",
+            "",
+            context,
+        ]
 
-        if not text:
-            return "No relevant schemes found in the available database."
-
-        # Split schemes if multiple schemes exist
-        chunks = re.split(
-            r"\n(?=(?:Scheme Name|Scheme|scheme_name|name)\s*:)",
-            text,
-        )
-
-        answer = "# Recommended Schemes\n\n"
-
-        for chunk in chunks:
-            chunk = chunk.strip()
-            if not chunk:
-                continue
-
-            answer += f"{chunk}\n\n"
-
-        return answer.strip()
+        return "\n".join(lines)
 
 
 llm_service = LLMService()
