@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from typing import Any, Dict, List
 
@@ -390,48 +389,29 @@ class RAGService:
         else:
             preferred_category = _infer_category_from_attributes(attributes)
 
-        semantic_results: List[Dict[str, Any]] = []
-        keyword_results: List[Dict[str, Any]] = []
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            semantic_future = executor.submit(
-                get_scheme_repository().search_semantic,
-                query,
-                where=where,
-                top_k=top_k,
-            )
-            keyword_future = executor.submit(
-                get_scheme_repository().search_keyword,
+        # search_keyword() already performs hybrid retrieval internally
+        # (it does semantic candidate retrieval + keyword scoring), so we
+        # avoid a separate search_semantic() call to reduce memory usage.
+        try:
+            keyword_results = get_scheme_repository().search_keyword(
                 query,
                 where=where,
                 top_k=top_k,
                 preferred_state=state,
                 preferred_category=preferred_category,
             )
-
-            try:
-                semantic_results = semantic_future.result()
-            except Exception as exc:
-                logger.exception("Semantic search failed: %s", exc)
-                semantic_results = []
-
-            try:
-                keyword_results = keyword_future.result()
-            except Exception as exc:
-                logger.exception("Keyword (hybrid) search failed: %s", exc)
-                keyword_results = []
+        except Exception as exc:
+            logger.exception("Keyword (hybrid) search failed: %s", exc)
+            keyword_results = []
 
         logger.info(
-            "Detected categories=%s | attributes=%s | semantic_results=%d | keyword_results=%d",
+            "Detected categories=%s | attributes=%s | keyword_results=%d",
             detected_categories,
             attributes,
-            len(semantic_results),
             len(keyword_results),
         )
 
-        combined = semantic_results + keyword_results
-
-        ranked = self._apply_ranking_boosts(combined, query=query, state=state)
+        ranked = self._apply_ranking_boosts(keyword_results, query=query, state=state)
 
         aggregated = get_scheme_repository().aggregate_ranked(ranked)[:top_k]
 
