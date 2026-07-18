@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from app.database.chromadb import chroma_client
+from app.database.chromadb import get_chroma_client
 
 DATASETS_DIR = ROOT / "datasets"
 
@@ -102,7 +102,7 @@ def main():
     print("\nClearing old vectors...")
 
     try:
-        chroma_client.delete()
+        get_chroma_client().delete()
         print("Old vectors removed.")
     except Exception:
         print("Collection was already empty.")
@@ -146,7 +146,7 @@ def main():
 
     for i in range(0, len(ids), BATCH_SIZE):
 
-        chroma_client.upsert(
+        get_chroma_client().upsert(
             ids=ids[i:i + BATCH_SIZE],
             documents=documents[i:i + BATCH_SIZE],
             metadatas=metadatas[i:i + BATCH_SIZE],
@@ -159,7 +159,7 @@ def main():
     print("\n" + "=" * 60)
     print("ChromaDB Build Complete")
     print("=" * 60)
-    print(f"Total vectors : {chroma_client.count()}")
+    print(f"Total vectors : {get_chroma_client().count()}")
 
 
 if __name__ == "__main__":

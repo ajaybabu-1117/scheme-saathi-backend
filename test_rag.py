@@ -1,4 +1,4 @@
-from app.database.chromadb import chroma_client
+from app.database.chromadb import get_chroma_client
 
 queries = [
     "I am a farmer from Andhra Pradesh",
@@ -12,7 +12,7 @@ for query in queries:
     print(query)
     print("-" * 80)
 
-    results = chroma_client.query(
+    results = get_chroma_client().query(
         query_texts=[query],
         n_results=5
     )

@@ -1,6 +1,6 @@
-from app.services.dataset_service import dataset_service
+from app.services.dataset_service import get_dataset_service
 
 if __name__ == "__main__":
-    for result in dataset_service.ingest_all(force=False):
+    for result in get_dataset_service().ingest_all(force=False):
         if result["file"].endswith(".json"):
             print(result)

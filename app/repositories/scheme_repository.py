@@ -8,7 +8,6 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 import chromadb
 from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
 
 from app.utils.text import clean_text
 
@@ -129,14 +128,7 @@ class SchemeRepository:
             logger.exception("Failed to initialize ChromaDB client: %s", exc)
             raise
 
-        try:
-            self._embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
-            logger.info("Loaded embedding model '%s'", EMBEDDING_MODEL_NAME)
-        except Exception as exc:
-            logger.exception(
-                "Failed to load embedding model '%s': %s", EMBEDDING_MODEL_NAME, exc
-            )
-            raise
+        self._embedder = None
 
         self._scheme_cache: Dict[str, Optional[Dict[str, Any]]] = {}
         self._all_items_cache: Optional[List[Dict[str, Any]]] = None
@@ -306,6 +298,22 @@ class SchemeRepository:
 
     @lru_cache(maxsize=256)
     def _embed_query(self, query: str) -> Tuple[float, ...]:
+        if self._embedder is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as exc:
+                logger.exception("Failed to import SentenceTransformer: %s", exc)
+                raise
+
+            try:
+                self._embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
+                logger.info("Lazy-loaded embedding model '%s'", EMBEDDING_MODEL_NAME)
+            except Exception as exc:
+                logger.exception(
+                    "Failed to load embedding model '%s': %s", EMBEDDING_MODEL_NAME, exc
+                )
+                raise
+
         vector = self._embedder.encode(query, normalize_embeddings=True)
         return tuple(float(x) for x in vector)
 
@@ -686,4 +694,6 @@ class SchemeRepository:
         return sorted(best.values(), key=lambda item: item["score"], reverse=True)
 
 
-scheme_repository = SchemeRepository()
+@lru_cache
+def get_scheme_repository() -> SchemeRepository:
+    return SchemeRepository()

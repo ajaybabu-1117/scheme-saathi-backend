@@ -4,14 +4,15 @@ import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from typing import Any, Dict, List
 
 from pypdf import filters
 
-from app.repositories.scheme_repository import scheme_repository
+from app.repositories.scheme_repository import get_scheme_repository
 from app.schemas.chat import Citation
 from app.schemas.profile import UserProfile
-from app.services.translation_service import translation_service
+from app.services.translation_service import get_translation_service
 from app.utils.states import detect_state, normalize_state
 from app.utils.text import clean_text
 
@@ -394,13 +395,13 @@ class RAGService:
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             semantic_future = executor.submit(
-                scheme_repository.search_semantic,
+                get_scheme_repository().search_semantic,
                 query,
                 where=where,
                 top_k=top_k,
             )
             keyword_future = executor.submit(
-                scheme_repository.search_keyword,
+                get_scheme_repository().search_keyword,
                 query,
                 where=where,
                 top_k=top_k,
@@ -432,7 +433,7 @@ class RAGService:
 
         ranked = self._apply_ranking_boosts(combined, query=query, state=state)
 
-        aggregated = scheme_repository.aggregate_ranked(ranked)[:top_k]
+        aggregated = get_scheme_repository().aggregate_ranked(ranked)[:top_k]
 
         elapsed = time.perf_counter() - start_time
         logger.info(
@@ -454,7 +455,7 @@ class RAGService:
 
         start_time = time.perf_counter()
 
-        english_query = translation_service.translate_to_english(
+        english_query = get_translation_service().translate_to_english(
             query,
             source_language=language,
         )
@@ -540,7 +541,7 @@ class RAGService:
                 sections.append(_build_scheme_section(item))
             answer = "\n\n".join(sections)
 
-        answer = translation_service.translate_from_english(
+        answer = get_translation_service().translate_from_english(
             answer,
             target_language=language,
         )
@@ -556,4 +557,6 @@ class RAGService:
         }
 
 
-rag_service = RAGService()
+@lru_cache
+def get_rag_service() -> RAGService:
+    return RAGService()

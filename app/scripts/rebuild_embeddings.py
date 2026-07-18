@@ -1,6 +1,6 @@
 from pprint import pprint
 
-from app.services.dataset_service import dataset_service
+from app.services.dataset_service import get_dataset_service
 
 if __name__ == "__main__":
-    pprint(dataset_service.rebuild())
+    pprint(get_dataset_service().rebuild())

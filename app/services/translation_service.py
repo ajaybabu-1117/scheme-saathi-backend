@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from deep_translator import GoogleTranslator
 from langdetect import detect
 
@@ -58,4 +59,6 @@ class TranslationService:
             return text
 
 
-translation_service = TranslationService()
+@lru_cache
+def get_translation_service() -> TranslationService:
+    return TranslationService()

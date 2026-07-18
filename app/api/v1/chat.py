@@ -10,13 +10,13 @@ from fastapi import APIRouter, Depends
 
 from app.core.deps import get_optional_user_claims
 from app.models.conversation import ConversationState
-from app.repositories.conversation_repository import conversation_repository
-from app.repositories.user_repository import user_repository
+from app.repositories.conversation_repository import get_conversation_repository
+from app.repositories.user_repository import get_user_repository
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.profile import UserProfile
-from app.services.analytics_service import analytics_service
-from app.services.conversation_service import conversation_service
-from app.services.rag_service import rag_service
+from app.services.analytics_service import get_analytics_service
+from app.services.conversation_service import get_conversation_service
+from app.services.rag_service import get_rag_service
 from app.utils.states import detect_state
 
 logger = logging.getLogger(__name__)
@@ -164,7 +164,7 @@ def _load_profile(user_id: str | None) -> UserProfile | None:
         return None
 
     try:
-        stored_profile = user_repository.get_profile(user_id)
+        stored_profile = get_user_repository().get_profile(user_id)
     except Exception as exc:
         logger.exception("Failed to load profile | user_id=%s error=%s", user_id, exc)
         return None
@@ -188,7 +188,7 @@ def _load_or_create_conversation(
     conversation = None
 
     try:
-        conversation = conversation_service.get(conversation_id)
+        conversation = get_conversation_service().get(conversation_id)
     except Exception as exc:
         logger.exception(
             "Failed to load conversation | conversation_id=%s error=%s",
@@ -207,7 +207,7 @@ def _load_or_create_conversation(
 
 def _safe_save_conversation(conversation: ConversationState) -> None:
     try:
-        conversation_service.save(conversation)
+        get_conversation_service().save(conversation)
     except Exception as exc:
         logger.exception(
             "Failed to save conversation | conversation_id=%s error=%s",
@@ -222,8 +222,8 @@ def _safe_record_user_message(
     message: str,
 ) -> None:
     try:
-        conversation_repository.create_if_missing(conversation_id, user_id)
-        conversation_repository.add_message(conversation_id, "user", message)
+        get_conversation_repository().create_if_missing(conversation_id, user_id)
+        get_conversation_repository().add_message(conversation_id, "user", message)
     except Exception as exc:
         logger.exception(
             "Failed to record user message | conversation_id=%s error=%s",
@@ -234,7 +234,7 @@ def _safe_record_user_message(
 
 def _safe_record_assistant_message(conversation_id: str, answer: str) -> None:
     try:
-        conversation_repository.add_message(conversation_id, "assistant", answer)
+        get_conversation_repository().add_message(conversation_id, "assistant", answer)
     except Exception as exc:
         logger.exception(
             "Failed to record assistant message | conversation_id=%s error=%s",
@@ -249,7 +249,7 @@ def _safe_log_analytics(
     user_id: str | None,
 ) -> None:
     try:
-        analytics_service.log_chat(message, conversation_id, user_id)
+        get_analytics_service().log_chat(message, conversation_id, user_id)
     except Exception as exc:
         logger.exception(
             "Failed to log analytics | conversation_id=%s error=%s",
@@ -369,7 +369,7 @@ async def chat(
         rag_start = time.perf_counter()
 
         try:
-            result = await rag_service.answer(
+            result = await get_rag_service().answer(
                 query=payload.message,
                 language=conversation.language,
                 user_profile=profile,

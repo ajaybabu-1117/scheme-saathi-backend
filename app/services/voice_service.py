@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import UploadFile
@@ -40,4 +41,6 @@ class VoiceService:
         return base64.b64encode(data).decode("utf-8")
 
 
-voice_service = VoiceService()
+@lru_cache
+def get_voice_service() -> VoiceService:
+    return VoiceService()

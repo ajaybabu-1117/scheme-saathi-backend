@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import re
 from typing import Any, Dict, List
 
@@ -60,4 +61,6 @@ class EligibilityService:
         return {"eligible": eligible, "confidence": round(min(confidence, 0.95), 2), "reasons": reasons}
 
 
-eligibility_service = EligibilityService()
+@lru_cache
+def get_eligibility_service() -> EligibilityService:
+    return EligibilityService()

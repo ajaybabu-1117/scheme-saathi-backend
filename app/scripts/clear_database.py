@@ -1,5 +1,5 @@
-from app.database.firebase import firebase_client
+from app.database.chromadb import get_chroma_client
 
 if __name__ == "__main__":
-    chroma_client.delete(where={})
+    get_chroma_client().delete(where={})
     print("Cleared vector collection")

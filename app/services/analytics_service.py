@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any, Dict, List
 
-from app.repositories.analytics_repository import analytics_repository
+from app.repositories.analytics_repository import get_analytics_repository
 
 
 class AnalyticsService:
@@ -13,10 +14,12 @@ class AnalyticsService:
         )
 
     def log_chat(self, query: str, conversation_id: str | None, user_id: str | None) -> None:
-        analytics_repository.log_event(
+        get_analytics_repository().log_event(
             "chat_query",
             {"query": query, "conversation_id": conversation_id, "user_id": user_id},
         )
 
 
-analytics_service = AnalyticsService()
+@lru_cache
+def get_analytics_service() -> AnalyticsService:
+    return AnalyticsService()

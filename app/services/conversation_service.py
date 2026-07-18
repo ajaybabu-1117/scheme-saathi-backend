@@ -1,4 +1,5 @@
 from app.models.conversation import ConversationState
+from functools import lru_cache
 
 conversations = {}
 
@@ -14,4 +15,6 @@ class ConversationService:
         conversations.pop(conversation_id, None)
 
 
-conversation_service = ConversationService()
+@lru_cache
+def get_conversation_service() -> ConversationService:
+    return ConversationService()

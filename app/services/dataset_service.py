@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import json
 import re
 from pathlib import Path
@@ -10,6 +11,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 
 from app.core.config import get_settings
+from app.database.chromadb import get_chroma_client
 from app.utils.hashing import sha256_file
 from app.utils.ids import slugify
 from app.utils.states import normalize_state
@@ -439,13 +441,13 @@ class DatasetService:
                 )
             )
 
-            chroma_client.delete(
+            get_chroma_client().delete(
                 where={
                     "source_file": source_file
                 }
             )
 
-            chroma_client.upsert(
+            get_chroma_client().upsert(
                 ids=[
                     x["id"]
                     for x in chunks
@@ -493,7 +495,7 @@ class DatasetService:
         return results
 
     def rebuild(self) -> Dict[str, Any]:
-        chroma_client.delete(where={})
+        get_chroma_client().delete(where={})
         self._save_registry({})
 
         results = self.ingest_all(force=True)
@@ -501,7 +503,7 @@ class DatasetService:
         return {
             "status": "rebuilt",
             "files": len(results),
-            "indexed_chunks": chroma_client.count(),
+            "indexed_chunks": get_chroma_client().count(),
             "results": results,
         }
 
@@ -510,7 +512,7 @@ class DatasetService:
 
         return {
             "dataset_files": len(files),
-            "indexed_chunks": chroma_client.count(),
+            "indexed_chunks": get_chroma_client().count(),
             "files": [
                 str(
                     path.relative_to(
@@ -526,14 +528,14 @@ class DatasetService:
             if (
                 self.settings.auto_bootstrap_datasets
                 and self.discover_files()
-                and chroma_client.count() == 0
+                and get_chroma_client().count() == 0
             ):
                 print("\nBootstrapping datasets...\n")
 
                 self.ingest_all(force=False)
 
                 print(
-                    f"\nIndexed {chroma_client.count()} chunks.\n"
+                    f"\nIndexed {get_chroma_client().count()} chunks.\n"
                 )
 
         except Exception as e:
@@ -543,4 +545,6 @@ class DatasetService:
 
 
 
-dataset_service = DatasetService()
+@lru_cache
+def get_dataset_service() -> DatasetService:
+    return DatasetService()

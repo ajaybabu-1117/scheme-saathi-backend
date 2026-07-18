@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import lru_cache
+
 
 class LLMService:
     async def generate(
@@ -29,4 +31,6 @@ class LLMService:
         )
 
 
-llm_service = LLMService()
+@lru_cache
+def get_llm_service() -> LLMService:
+    return LLMService()

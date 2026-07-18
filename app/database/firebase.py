@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional
@@ -75,4 +76,6 @@ class FirebaseClient:
         self.store.delete(collection, doc_id)
 
 
-firebase_client = FirebaseClient()
+@lru_cache
+def get_firebase_client() -> FirebaseClient:
+    return FirebaseClient()

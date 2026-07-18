@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import lru_cache
 
 from app.core.security import create_access_token
 from app.models.enums import AuthProvider
-from app.repositories.user_repository import user_repository
+from app.repositories.user_repository import get_user_repository
 from app.schemas.auth import AuthLoginRequest
 from app.utils.ids import generate_id
 
@@ -12,7 +13,7 @@ from app.utils.ids import generate_id
 class AuthService:
     def anonymous_login(self):
         user_id = generate_id("anon")
-        user_repository.save_user(
+        get_user_repository().save_user(
             user_id,
             {
                 "user_id": user_id,
@@ -33,7 +34,7 @@ class AuthService:
             user_id = generate_id("user")
             email = str(payload.email or "demo@example.com")
             name = payload.name or email.split("@")[0]
-        user_repository.save_user(
+        get_user_repository().save_user(
             user_id,
             {
                 "user_id": user_id,
@@ -47,4 +48,6 @@ class AuthService:
         return {"access_token": token, "user_id": user_id, "provider": payload.provider.value, "is_anonymous": False}
 
 
-auth_service = AuthService()
+@lru_cache
+def get_auth_service() -> AuthService:
+    return AuthService()

@@ -161,4 +161,6 @@ class ChromaClient:
         return self.collection.count()
 
 
-chroma_client = ChromaClient()
+@lru_cache
+def get_chroma_client() -> ChromaClient:
+    return ChromaClient()
